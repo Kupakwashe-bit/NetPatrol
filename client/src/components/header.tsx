@@ -6,7 +6,7 @@ import { useState, useEffect } from "react";
 import type { Alert } from "@shared/schema";
 
 interface HeaderProps {
-  onOpenConfig: () => void;
+  onOpenConfig?: () => void;
 }
 
 export default function Header({ onOpenConfig }: HeaderProps) {
@@ -69,6 +69,7 @@ export default function Header({ onOpenConfig }: HeaderProps) {
             size="icon" 
             variant="secondary" 
             onClick={onOpenConfig}
+            disabled={!onOpenConfig}
             data-testid="button-settings"
           >
             <Settings className="h-4 w-4" />
