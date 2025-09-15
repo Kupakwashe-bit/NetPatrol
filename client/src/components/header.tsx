@@ -3,6 +3,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { useQuery } from "@tanstack/react-query";
 import { useState, useEffect } from "react";
+import { Link, useLocation } from "wouter";
 import type { Alert } from "@shared/schema";
 
 interface HeaderProps {
@@ -11,6 +12,7 @@ interface HeaderProps {
 
 export default function Header({ onOpenConfig }: HeaderProps) {
   const [lastUpdate, setLastUpdate] = useState(new Date());
+  const [location] = useLocation();
 
   // Fetch unacknowledged alerts count
   const { data: alerts = [] } = useQuery<Alert[]>({
@@ -26,6 +28,13 @@ export default function Header({ onOpenConfig }: HeaderProps) {
     return () => clearInterval(timer);
   }, []);
 
+  const isActive = (path: string) => {
+    if (path === "/" || path === "/dashboard") {
+      return location === "/" || location === "/dashboard";
+    }
+    return location === path;
+  };
+
   return (
     <header className="bg-card border-b border-border px-4 lg:px-6 py-4">
       <div className="flex items-center justify-between">
@@ -38,18 +47,42 @@ export default function Header({ onOpenConfig }: HeaderProps) {
           </div>
           
           <nav className="hidden md:flex items-center space-x-6 ml-8">
-            <a href="#" className="text-primary font-medium border-b-2 border-primary pb-1" data-testid="nav-dashboard">
-              Dashboard
-            </a>
-            <a href="#" className="text-muted-foreground hover:text-foreground transition-colors" data-testid="nav-traffic">
-              Traffic Analysis
-            </a>
-            <a href="#" className="text-muted-foreground hover:text-foreground transition-colors" data-testid="nav-models">
-              ML Models
-            </a>
-            <a href="#" className="text-muted-foreground hover:text-foreground transition-colors" data-testid="nav-config">
-              Configuration
-            </a>
+            <Link href="/dashboard">
+              <a className={`transition-colors pb-1 ${
+                isActive("/dashboard") 
+                  ? "text-primary font-medium border-b-2 border-primary" 
+                  : "text-muted-foreground hover:text-foreground"
+              }`} data-testid="nav-dashboard">
+                Dashboard
+              </a>
+            </Link>
+            <Link href="/traffic-analysis">
+              <a className={`transition-colors pb-1 ${
+                isActive("/traffic-analysis")
+                  ? "text-primary font-medium border-b-2 border-primary"
+                  : "text-muted-foreground hover:text-foreground"
+              }`} data-testid="nav-traffic">
+                Traffic Analysis
+              </a>
+            </Link>
+            <Link href="/ml-models">
+              <a className={`transition-colors pb-1 ${
+                isActive("/ml-models")
+                  ? "text-primary font-medium border-b-2 border-primary"
+                  : "text-muted-foreground hover:text-foreground"
+              }`} data-testid="nav-models">
+                ML Models
+              </a>
+            </Link>
+            <Link href="/configuration">
+              <a className={`transition-colors pb-1 ${
+                isActive("/configuration")
+                  ? "text-primary font-medium border-b-2 border-primary"
+                  : "text-muted-foreground hover:text-foreground"
+              }`} data-testid="nav-config">
+                Configuration
+              </a>
+            </Link>
           </nav>
         </div>
 

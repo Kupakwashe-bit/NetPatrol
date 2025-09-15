@@ -4,13 +4,20 @@ import { QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import Dashboard from "@/pages/dashboard";
+import TrafficAnalysis from "@/pages/traffic-analysis";
+import MLModels from "@/pages/ml-models";
+import Configuration from "@/pages/configuration";
+import NotFound from "@/pages/not-found";
 
 function Router() {
   return (
     <Switch>
       <Route path="/" component={Dashboard} />
       <Route path="/dashboard" component={Dashboard} />
-      <Route component={Dashboard} />
+      <Route path="/traffic-analysis" component={TrafficAnalysis} />
+      <Route path="/ml-models" component={MLModels} />
+      <Route path="/configuration" component={Configuration} />
+      <Route component={NotFound} />
     </Switch>
   );
 }
