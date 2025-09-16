@@ -143,6 +143,36 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // ML Model Metrics API
+  app.get("/api/model/metrics", async (req, res) => {
+    try {
+      const metrics = anomalyDetector.getModelMetrics();
+      res.json(metrics);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch model metrics" });
+    }
+  });
+
+  app.get("/api/model/cells", async (req, res) => {
+    try {
+      const cells = anomalyDetector.getCellNames();
+      res.json(cells);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch monitored cells" });
+    }
+  });
+
+  app.get("/api/model/cell/:cellName/history", async (req, res) => {
+    try {
+      const cellName = req.params.cellName;
+      const limit = parseInt(req.query.limit as string) || 100;
+      const history = anomalyDetector.getTrafficHistory(cellName, limit);
+      res.json(history);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch cell history" });
+    }
+  });
+
   const httpServer = createServer(app);
 
   // WebSocket server for real-time updates

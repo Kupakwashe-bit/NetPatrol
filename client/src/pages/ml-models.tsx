@@ -4,11 +4,19 @@ import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
-import { Brain, Activity, TrendingUp, Settings, Play, Pause, RotateCcw } from "lucide-react";
+import { Brain, Activity, TrendingUp, Settings, Play, Pause, RotateCcw, Database } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import AnomalyChart from "@/components/anomaly-chart";
 import type { SystemMetrics } from "@shared/schema";
 import { useState } from "react";
+
+interface ModelMetrics {
+  isTraining: boolean;
+  accuracy: number;
+  dataPoints: number;
+  anomalies: number;
+  cellsMonitored: number;
+}
 
 export default function MLModels() {
   const [modelStatus, setModelStatus] = useState<"running" | "paused" | "training">("running");
@@ -18,7 +26,18 @@ export default function MLModels() {
     refetchInterval: 5000,
   });
 
-  const modelAccuracy = currentMetrics?.modelAccuracy ? (currentMetrics.modelAccuracy * 100).toFixed(1) : "0.0";
+  const { data: modelMetrics } = useQuery<ModelMetrics>({
+    queryKey: ["/api/model/metrics"],
+    refetchInterval: 10000,
+  });
+
+  const { data: monitoredCells = [] } = useQuery<string[]>({
+    queryKey: ["/api/model/cells"],
+    refetchInterval: 30000,
+  });
+
+  const modelAccuracy = modelMetrics?.accuracy ? (modelMetrics.accuracy * 100).toFixed(1) : "0.0";
+  const isModelTraining = modelMetrics?.isTraining ?? false;
   
   const handleModelAction = (action: string) => {
     if (action === "pause") {
@@ -45,8 +64,14 @@ export default function MLModels() {
                 <p className="text-muted-foreground">Monitor and configure machine learning models for threat detection</p>
               </div>
               <div className="flex items-center space-x-2">
-                <Badge variant={modelStatus === "running" ? "default" : modelStatus === "training" ? "secondary" : "outline"}>
-                  {modelStatus === "running" ? "Active" : modelStatus === "training" ? "Training" : "Paused"}
+                <Badge variant={isModelTraining ? "secondary" : "default"}>
+                  {isModelTraining ? "Training" : "Active"}
+                </Badge>
+                <Badge variant="outline" className="text-xs">
+                  {modelMetrics?.dataPoints?.toLocaleString() || "0"} data points
+                </Badge>
+                <Badge variant="outline" className="text-xs">
+                  {modelMetrics?.anomalies || "0"} anomalies
                 </Badge>
               </div>
             </div>
@@ -74,9 +99,9 @@ export default function MLModels() {
                     <div>
                       <p className="text-sm text-muted-foreground mb-1">Anomalies Detected</p>
                       <p className="text-2xl font-bold text-foreground">
-                        {currentMetrics?.threatsBlocked || 0}
+                        {modelMetrics?.anomalies || 0}
                       </p>
-                      <p className="text-xs text-destructive mt-1">↑ 15% this hour</p>
+                      <p className="text-xs text-muted-foreground mt-1">Total from dataset</p>
                     </div>
                     <div className="w-12 h-12 bg-destructive/20 rounded-lg flex items-center justify-center">
                       <Activity className="text-destructive" />
@@ -89,12 +114,12 @@ export default function MLModels() {
                 <CardContent className="p-6">
                   <div className="flex items-center justify-between">
                     <div>
-                      <p className="text-sm text-muted-foreground mb-1">Processing Speed</p>
-                      <p className="text-2xl font-bold text-foreground">1.2K/s</p>
-                      <p className="text-xs text-chart-4 mt-1">packets analyzed</p>
+                      <p className="text-sm text-muted-foreground mb-1">Data Sources</p>
+                      <p className="text-2xl font-bold text-foreground">{modelMetrics?.cellsMonitored || 0}</p>
+                      <p className="text-xs text-chart-4 mt-1">cell towers monitored</p>
                     </div>
                     <div className="w-12 h-12 bg-chart-4/20 rounded-lg flex items-center justify-center">
-                      <Brain className="text-chart-4" />
+                      <Database className="text-chart-4" />
                     </div>
                   </div>
                 </CardContent>
