@@ -52,8 +52,11 @@ export async function setupVite(app: Express, server: Server) {
         "index.html",
       );
 
-      // always reload the index.html file from disk incase it changes
-      let template = await fs.promises.readFile(clientTemplate, "utf-8");
+  // always reload the index.html file from disk incase it changes
+  let template = await fs.promises.readFile(clientTemplate, "utf-8");
+  // remove the replit dev banner script which can fail when offline or
+  // in local development environments and cause the page to appear blank
+  template = template.replace(/<script[^>]*replit-dev-banner\.js"[^>]*><\/script>/i, "");
       template = template.replace(
         `src="/src/main.tsx"`,
         `src="/src/main.tsx?v=${nanoid()}"`,
