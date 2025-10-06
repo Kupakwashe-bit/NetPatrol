@@ -5,7 +5,8 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import { Brain, Activity, TrendingUp, Settings, Play, Pause, RotateCcw, Database } from "lucide-react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useDropzone } from "react-dropzone";
 import AnomalyChart from "@/components/anomaly-chart";
 import type { SystemMetrics } from "@shared/schema";
 import { useState } from "react";
@@ -20,6 +21,10 @@ interface ModelMetrics {
 
 export default function MLModels() {
   const [modelStatus, setModelStatus] = useState<"running" | "paused" | "training">("running");
+  const [uploading, setUploading] = useState(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  const [uploadSuccess, setUploadSuccess] = useState<string | null>(null);
+  const queryClient = useQueryClient();
 
   const { data: currentMetrics } = useQuery<SystemMetrics>({
     queryKey: ["/api/metrics/current"],
@@ -39,17 +44,63 @@ export default function MLModels() {
   const modelAccuracy = modelMetrics?.accuracy ? (modelMetrics.accuracy * 100).toFixed(1) : "0.0";
   const isModelTraining = modelMetrics?.isTraining ?? false;
   
-  const handleModelAction = (action: string) => {
-    if (action === "pause") {
-      setModelStatus("paused");
-    } else if (action === "resume") {
-      setModelStatus("running");
-    } else if (action === "retrain") {
-      setModelStatus("training");
-      // Simulate training completion after 5 seconds
-      setTimeout(() => setModelStatus("running"), 5000);
+  const handleModelAction = async (action: string) => {
+    try {
+      if (action === "pause") {
+        await fetch("/api/model/pause", { method: "POST" });
+        setModelStatus("paused");
+      } else if (action === "resume") {
+        await fetch("/api/model/resume", { method: "POST" });
+        setModelStatus("running");
+      } else if (action === "retrain") {
+        setModelStatus("training");
+        await fetch("/api/model/retrain", { method: "POST" });
+        setModelStatus("running");
+      }
+      // refresh metrics after actions
+      queryClient.invalidateQueries({ queryKey: ["/api/model/metrics"] });
+    } catch (e) {
+      // no-op
     }
   };
+
+  const onDrop = async (acceptedFiles: File[]) => {
+    setUploadError(null);
+    setUploadSuccess(null);
+    if (!acceptedFiles || acceptedFiles.length === 0) return;
+    const file = acceptedFiles[0];
+    // basic validation
+    const isCsv = file.name.toLowerCase().endsWith(".csv") || file.type === "text/csv";
+    const isJson = file.name.toLowerCase().endsWith(".json") || file.type === "application/json";
+    if (!isCsv && !isJson) {
+      setUploadError("Please upload a CSV or JSON file.");
+      return;
+    }
+    if (file.size > 80 * 1024 * 1024) {
+      setUploadError("File too large. Max 80MB.");
+      return;
+    }
+
+    const form = new FormData();
+    form.append("file", file);
+    setUploading(true);
+    try {
+      const res = await fetch("/api/model/upload", { method: "POST", body: form });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || "Upload failed");
+      }
+      setUploadSuccess("Dataset uploaded. You can now retrain the model.");
+      // refresh metrics to reflect new dataset counts
+      queryClient.invalidateQueries({ queryKey: ["/api/model/metrics"] });
+    } catch (err: any) {
+      setUploadError(err.message || "Upload failed");
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const { getRootProps, getInputProps, isDragActive, acceptedFiles } = useDropzone({ onDrop, multiple: false });
 
   return (
     <div className="min-h-screen bg-background">
@@ -175,6 +226,30 @@ export default function MLModels() {
                     <Progress value={75} className="h-2" />
                   </div>
                 )}
+                
+                {/* Upload Dataset */}
+                <div className="mt-6">
+                  <h4 className="text-sm font-medium text-foreground mb-3">Upload Dataset (CSV or JSON)</h4>
+                  <div
+                    {...getRootProps()}
+                    className={`border border-dashed rounded-md p-6 text-center cursor-pointer ${isDragActive ? 'bg-secondary/20' : 'bg-transparent'}`}
+                  >
+                    <input {...getInputProps()} />
+                    {isDragActive ? (
+                      <p className="text-sm">Drop the file here…</p>
+                    ) : (
+                      <p className="text-sm text-muted-foreground">Drag & drop a file here, or click to select</p>
+                    )}
+                    {acceptedFiles && acceptedFiles[0] && (
+                      <p className="text-xs mt-2">Selected: {acceptedFiles[0].name}</p>
+                    )}
+                  </div>
+                  <div className="mt-2">
+                    {uploading && <p className="text-xs text-muted-foreground">Uploading…</p>}
+                    {uploadError && <p className="text-xs text-destructive">{uploadError}</p>}
+                    {uploadSuccess && <p className="text-xs text-chart-4">{uploadSuccess}</p>}
+                  </div>
+                </div>
               </CardContent>
             </Card>
 

@@ -3,21 +3,71 @@ import { createServer, type Server } from "http";
 import { WebSocketServer, WebSocket } from "ws";
 import { storage } from "./storage";
 import { NetworkAnomalyDetector } from './ml-model';
+import multer from 'multer';
+import path from 'path';
+import fs from 'fs';
 import { 
   insertNetworkTrafficSchema, 
   insertAlertSchema, 
   insertSystemMetricsSchema,
   insertMlModelConfigSchema
 } from "@shared/schema";
+import nodemailer from 'nodemailer';
 
 export async function registerRoutes(app: Express): Promise<Server> {
   // Initialize ML model
   const anomalyDetector = new NetworkAnomalyDetector();
+  let generationPaused = false;
+  // Notification setup (use environment vars if provided)
+  const transporter = nodemailer.createTransport({
+    host: process.env.SMTP_HOST || 'smtp.gmail.com',
+    port: parseInt(process.env.SMTP_PORT || '587', 10),
+    secure: false,
+    auth: process.env.SMTP_USER && process.env.SMTP_PASS ? {
+      user: process.env.SMTP_USER,
+      pass: process.env.SMTP_PASS
+    } : undefined
+  });
+
+  async function sendAnomalyEmail(subject: string, text: string) {
+    try {
+      const to = process.env.ALERT_EMAIL_TO;
+      const from = process.env.ALERT_EMAIL_FROM || process.env.SMTP_USER || 'alerts@example.com';
+      if (!to) return; // skip if not configured
+      await transporter.sendMail({ from, to, subject, text });
+    } catch (err) {
+      console.error('Failed to send alert email:', err);
+    }
+  }
   console.log('Starting ML model training...');
   anomalyDetector.trainModel().then(() => {
     console.log('ML model training completed!');
   }).catch(error => {
     console.error('ML model training failed:', error);
+  });
+
+  // File upload setup
+  const upload = multer({
+    storage: multer.diskStorage({
+      destination: (req: any, file: any, cb: any) => {
+        const uploadDir = path.join(process.cwd(), 'uploads');
+        if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
+        cb(null, uploadDir);
+      },
+      filename: (req: any, file: any, cb: any) => {
+        const unique = Date.now() + '-' + Math.round(Math.random() * 1e9);
+        cb(null, unique + '-' + file.originalname);
+      }
+    }),
+    limits: { fileSize: 80 * 1024 * 1024 }, // 80MB
+    fileFilter: (req: any, file: any, cb: any) => {
+      const allowed = ['text/csv', 'application/json'];
+      if (allowed.includes(file.mimetype) || file.originalname.endsWith('.csv') || file.originalname.endsWith('.json')) {
+        cb(null, true);
+      } else {
+        cb(new Error('Only CSV or JSON files are allowed'));
+      }
+    }
   });
   // Network Traffic API
   app.get("/api/traffic", async (req, res) => {
@@ -173,6 +223,54 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Pause/Resume model-driven generation
+  app.post('/api/model/pause', async (_req, res) => {
+    generationPaused = true;
+    res.json({ status: 'paused' });
+  });
+
+  app.post('/api/model/resume', async (_req, res) => {
+    generationPaused = false;
+    res.json({ status: 'running' });
+  });
+
+  // Dataset upload endpoint
+  app.post('/api/model/upload', upload.single('file'), async (req, res) => {
+    try {
+      const uploadedFile = (req as any).file as any;
+      if (!uploadedFile) return res.status(400).json({ error: 'No file uploaded' });
+      // Pass the uploaded file path to the model to load and preprocess
+      const filePath = uploadedFile.path;
+      await anomalyDetector.loadNewDataset(filePath);
+      res.json({ message: 'File uploaded and dataset loaded successfully' });
+    } catch (error: any) {
+      console.error('Upload failed:', error);
+      res.status(400).json({ error: error.message || 'Failed to upload dataset' });
+    }
+  });
+
+  // Retrain endpoint
+  app.post('/api/model/retrain', async (req, res) => {
+    try {
+      await anomalyDetector.trainModel();
+      const metrics = anomalyDetector.getModelMetrics();
+      res.json({ message: 'Model retrained', metrics });
+    } catch (error) {
+      res.status(500).json({ error: 'Failed to retrain model' });
+    }
+  });
+
+  // Evaluate endpoint (compute metrics on current dataset)
+  app.post('/api/model/evaluate', async (req, res) => {
+    try {
+      const metrics = anomalyDetector.getModelMetrics();
+      const summary = anomalyDetector.evaluateCurrentDataset();
+      res.json({ metrics, summary });
+    } catch (error) {
+      res.status(500).json({ error: 'Failed to evaluate model' });
+    }
+  });
+
   const httpServer = createServer(app);
 
   // WebSocket server for real-time updates
@@ -198,6 +296,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // Generate real ML-powered data
   const generateRealTimeData = async () => {
+    if (generationPaused) return;
     const clients = Array.from(wss.clients).filter(client => client.readyState === WebSocket.OPEN);
     
     if (clients.length === 0) return;
@@ -268,7 +367,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
           acknowledged: false,
         };
 
-        await storage.createAlert(alert);
+        const saved = await storage.createAlert(alert);
+        // Send email notification
+        await sendAnomalyEmail(
+          `[${alert.type}] ${alert.title}`,
+          `${alert.description}\nSource IP: ${alert.sourceIp}\nTimestamp: ${new Date().toISOString()}`
+        );
       }
 
       // Generate real system metrics with ML model info

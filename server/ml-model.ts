@@ -20,7 +20,7 @@ export interface TrafficDataPoint {
 export class NetworkAnomalyDetector {
   private model: tf.Sequential | null = null;
   private trafficData: TrafficDataPoint[] = [];
-  private trafficHistory: Map<string, number[]> = new Map();
+  private trafficHistory: Map<string, any> = new Map();
   private isModelTrained = false;
   private modelAccuracy = 0;
 
@@ -55,6 +55,56 @@ export class NetworkAnomalyDetector {
     }
   }
 
+  public async loadNewDataset(filePath: string): Promise<void> {
+    try {
+      const ext = path.extname(filePath).toLowerCase();
+      const content = fs.readFileSync(filePath, 'utf8');
+
+      let parsed: TrafficDataPoint[] = [];
+      if (ext === '.csv') {
+        const lines = content.split('\n').filter(line => line.trim());
+        const header = lines[0].toLowerCase();
+        const hasHeader = header.includes('time') && header.includes('cell');
+        const dataLines = hasHeader ? lines.slice(1) : lines;
+
+        parsed = dataLines.map(line => {
+          const parts = line.split(',').map(p => p.trim());
+          // Attempt to map common CSV schemas: time, cellName, cellId, totalTraffic
+          const [time, cellName, cellId, totalTraffic] = parts;
+          return {
+            time: time || new Date().toISOString(),
+            cellName: cellName || 'Unknown',
+            cellId: parseInt(cellId || '0', 10),
+            totalTraffic: parseFloat(totalTraffic || '0'),
+          };
+        }).filter(d => !isNaN(d.totalTraffic));
+      } else if (ext === '.json') {
+        const json = JSON.parse(content);
+        const arr: any[] = Array.isArray(json) ? json : (json.data || []);
+        parsed = arr.map((row: any) => ({
+          time: String(row.time || row.timestamp || new Date().toISOString()),
+          cellName: String(row.cellName || row.cell || row.sector || 'Unknown'),
+          cellId: parseInt(String(row.cellId || row.id || '0'), 10),
+          totalTraffic: parseFloat(String(row.totalTraffic || row.traffic || row.bytes || '0')),
+        })).filter(d => !isNaN(d.totalTraffic));
+      } else {
+        throw new Error('Unsupported file format. Please upload CSV or JSON');
+      }
+
+      if (parsed.length === 0) {
+        throw new Error('Uploaded dataset appears to be empty or invalid');
+      }
+
+      this.trafficData = parsed;
+      this.computeAnomalyFeatures();
+      this.isModelTrained = false; // require retraining
+      this.modelAccuracy = 0;
+    } catch (err) {
+      console.error('Failed to load new dataset:', err);
+      throw err;
+    }
+  }
+
   private computeAnomalyFeatures(): void {
     // Group data by cell to compute historical patterns
     const cellGroups: Map<string, TrafficDataPoint[]> = new Map();
@@ -67,6 +117,15 @@ export class NetworkAnomalyDetector {
       cellGroups.get(key)!.push(point);
     });
 
+    // Demand condition helper
+    type DemandCondition = 'peak' | 'moderate' | 'offpeak';
+    const getCondition = (dateStr: string): DemandCondition => {
+      const hour = new Date(dateStr).getHours();
+      if (hour >= 17 && hour <= 21) return 'peak';
+      if (hour >= 0 && hour <= 6) return 'offpeak';
+      return 'moderate';
+    };
+
     // Compute statistics for each cell
     cellGroups.forEach((points, cellName) => {
       const traffics = points.map(p => p.totalTraffic);
@@ -74,16 +133,44 @@ export class NetworkAnomalyDetector {
       const variance = traffics.reduce((sum, val) => sum + Math.pow(val - mean, 2), 0) / traffics.length;
       const stdDev = Math.sqrt(variance);
 
+      // Condition-specific stats
+      const byCondition: Record<DemandCondition, number[]> = {
+        peak: [], moderate: [], offpeak: []
+      };
+      points.forEach(p => {
+        byCondition[getCondition(p.time)].push(p.totalTraffic);
+      });
+      const conditionStats: Record<DemandCondition, { mean: number; stdDev: number }> = {
+        peak: { mean: 0, stdDev: 0 },
+        moderate: { mean: 0, stdDev: 0 },
+        offpeak: { mean: 0, stdDev: 0 }
+      };
+      (Object.keys(byCondition) as DemandCondition[]).forEach(cond => {
+        const arr = byCondition[cond];
+        if (arr.length > 0) {
+          const m = arr.reduce((s, v) => s + v, 0) / arr.length;
+          const v = arr.reduce((s, v) => s + Math.pow(v - m, 2), 0) / arr.length;
+          conditionStats[cond] = { mean: m, stdDev: Math.sqrt(v) };
+        } else {
+          conditionStats[cond] = { mean, stdDev };
+        }
+      });
+
       // Mark anomalies using statistical approach (3-sigma rule)
       points.forEach(point => {
-        const zscore = Math.abs((point.totalTraffic - mean) / stdDev);
+        const cond = getCondition(point.time);
+        const stats = conditionStats[cond];
+        const zscore = Math.abs((point.totalTraffic - stats.mean) / (stats.stdDev || (stdDev || 1e-6)));
+        // Adaptive threshold: allow slightly higher variance at peak, stricter at off-peak
+        const threshold = cond === 'peak' ? 3.0 : cond === 'moderate' ? 2.5 : 2.0;
         point.isAnomaly = zscore > 2.5; // More sensitive threshold
+        point.isAnomaly = zscore > threshold;
         point.riskScore = Math.min(10, zscore * 2); // Scale to 0-10
         
         if (point.isAnomaly) {
-          if (point.totalTraffic > mean + 2 * stdDev) {
+          if (point.totalTraffic > stats.mean + 2 * (stats.stdDev || stdDev)) {
             point.anomalyType = 'High Traffic Spike';
-          } else if (point.totalTraffic < mean - 2 * stdDev) {
+          } else if (point.totalTraffic < stats.mean - 2 * (stats.stdDev || stdDev)) {
             point.anomalyType = 'Unusual Low Traffic';
           } else {
             point.anomalyType = 'Statistical Outlier';
@@ -95,7 +182,8 @@ export class NetworkAnomalyDetector {
       this.trafficHistory.set(cellName, {
         mean,
         stdDev,
-        recent: traffics.slice(-20) // Last 20 readings
+        recent: traffics.slice(-20), // Last 20 readings
+        conditionStats
       } as any);
     });
 
@@ -196,9 +284,14 @@ export class NetworkAnomalyDetector {
       // Fallback to statistical method
       const cellHistory = this.trafficHistory.get(cellName);
       if (cellHistory) {
-        const zscore = Math.abs((trafficValue - (cellHistory as any).mean) / (cellHistory as any).stdDev);
+        const hour = timestamp ? new Date(timestamp).getHours() : new Date().getHours();
+        const cond: 'peak' | 'moderate' | 'offpeak' = (hour >= 17 && hour <= 21) ? 'peak' : (hour >= 0 && hour <= 6) ? 'offpeak' : 'moderate';
+        const stats = (cellHistory as any).conditionStats?.[cond] || cellHistory;
+        const baseStd = stats.stdDev || (cellHistory as any).stdDev || 1e-6;
+        const zscore = Math.abs((trafficValue - stats.mean) / baseStd);
+        const threshold = cond === 'peak' ? 3.0 : cond === 'moderate' ? 2.5 : 2.0;
         return {
-          isAnomaly: zscore > 2.5,
+          isAnomaly: zscore > threshold,
           riskScore: Math.min(10, zscore * 2),
           confidence: 0.7,
           anomalyType: zscore > 2.5 ? 'Statistical Outlier' : undefined
@@ -243,6 +336,61 @@ export class NetworkAnomalyDetector {
       console.error('Error making prediction:', error);
       return { isAnomaly: false, riskScore: 0, confidence: 0 };
     }
+  }
+
+  public evaluateCurrentDataset() {
+    // Summaries by demand condition and by cell
+    const buckets: Record<'peak' | 'moderate' | 'offpeak', { total: number; anomalies: number }> = {
+      peak: { total: 0, anomalies: 0 },
+      moderate: { total: 0, anomalies: 0 },
+      offpeak: { total: 0, anomalies: 0 }
+    };
+    const cellAnomalies: Record<string, number> = {};
+    const getCond = (t: string) => {
+      const h = new Date(t).getHours();
+      if (h >= 17 && h <= 21) return 'peak' as const;
+      if (h >= 0 && h <= 6) return 'offpeak' as const;
+      return 'moderate' as const;
+    };
+
+    this.trafficData.forEach(p => {
+      const c = getCond(p.time);
+      buckets[c].total += 1;
+      if (p.isAnomaly) {
+        buckets[c].anomalies += 1;
+        cellAnomalies[p.cellName] = (cellAnomalies[p.cellName] || 0) + 1;
+      }
+    });
+
+    const topCells = Object.entries(cellAnomalies)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 5)
+      .map(([cellName, count]) => ({ cellName, anomalies: count }));
+
+    return {
+      counts: {
+        totalPoints: this.trafficData.length,
+        totalAnomalies: this.trafficData.filter(d => d.isAnomaly).length,
+      },
+      byCondition: {
+        peak: {
+          total: buckets.peak.total,
+          anomalies: buckets.peak.anomalies,
+          anomalyRate: buckets.peak.total ? buckets.peak.anomalies / buckets.peak.total : 0
+        },
+        moderate: {
+          total: buckets.moderate.total,
+          anomalies: buckets.moderate.anomalies,
+          anomalyRate: buckets.moderate.total ? buckets.moderate.anomalies / buckets.moderate.total : 0
+        },
+        offpeak: {
+          total: buckets.offpeak.total,
+          anomalies: buckets.offpeak.anomalies,
+          anomalyRate: buckets.offpeak.total ? buckets.offpeak.anomalies / buckets.offpeak.total : 0
+        }
+      },
+      topCells
+    };
   }
 
   public getRandomTrafficPoint(): TrafficDataPoint | null {
