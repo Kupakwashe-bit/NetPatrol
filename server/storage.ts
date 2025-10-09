@@ -12,6 +12,7 @@ export interface IStorage {
   getUser(id: string): Promise<User | undefined>;
   getUserByUsername(username: string): Promise<User | undefined>;
   createUser(user: InsertUser): Promise<User>;
+  updateUser(user: { id: string; username?: string; password?: string }): Promise<User>;
 
   // Network Traffic
   getNetworkTraffic(limit?: number, offset?: number): Promise<NetworkTraffic[]>;
@@ -74,6 +75,18 @@ export class MemStorage implements IStorage {
     const user: User = { ...insertUser, id };
     this.users.set(id, user);
     return user;
+  }
+
+  async updateUser(user: { id: string; username?: string; password?: string }): Promise<User> {
+    const existing = this.users.get(user.id);
+    if (!existing) throw new Error('User not found');
+    const updated: User = {
+      ...existing,
+      ...(user.username ? { username: user.username } : {}),
+      ...(user.password ? { password: user.password } : {}),
+    } as User;
+    this.users.set(user.id, updated);
+    return updated;
   }
 
   async getNetworkTraffic(limit = 100, offset = 0): Promise<NetworkTraffic[]> {

@@ -6,6 +6,8 @@ import { NetworkAnomalyDetector } from './ml-model';
 import multer from 'multer';
 import path from 'path';
 import fs from 'fs';
+import jwt from 'jsonwebtoken';
+import bcrypt from 'bcryptjs';
 import { 
   insertNetworkTrafficSchema, 
   insertAlertSchema, 
@@ -46,6 +48,118 @@ export async function registerRoutes(app: Express): Promise<Server> {
     console.error('ML model training failed:', error);
   });
 
+  // Auth config
+  const JWT_SECRET = process.env.JWT_SECRET || 'dev_secret_change_me';
+  type JwtUser = { id: string; username: string; role?: string };
+  function signToken(user: JwtUser) {
+    return jwt.sign(user, JWT_SECRET, { expiresIn: '12h' });
+  }
+  function requireAuth(req: any, res: any, next: any) {
+    try {
+      const header = req.headers['authorization'] || '';
+      const token = header.startsWith('Bearer ') ? header.slice(7) : null;
+      if (!token) return res.status(401).json({ error: 'Unauthorized' });
+      const decoded = jwt.verify(token, JWT_SECRET) as JwtUser;
+      req.user = decoded;
+      next();
+    } catch {
+      return res.status(401).json({ error: 'Invalid token' });
+    }
+  }
+
+  // Auth endpoints
+  // Seed default admin user if missing
+  (async () => {
+    try {
+      const existingAdmin = await storage.getUserByUsername('admin');
+      if (!existingAdmin) {
+        const hashed = await bcrypt.hash('admin123', 10);
+        await storage.createUser({ username: 'admin', password: hashed });
+        console.log('Seeded default admin user: admin / admin123');
+      } else {
+        // Ensure password matches seed if previously created without hash
+        const needsHashFix = !existingAdmin.password.startsWith('$2');
+        if (needsHashFix) {
+          const hashed = await bcrypt.hash('admin123', 10);
+          await storage.updateUser({ id: existingAdmin.id, password: hashed });
+          console.log('Updated admin password hash');
+        }
+      }
+    } catch (e) {
+      console.warn('Failed to seed default admin user');
+    }
+  })();
+
+  app.post('/auth/register', async (req, res) => {
+    try {
+      const { username, password } = req.body || {};
+      if (!username || !password) return res.status(400).json({ error: 'Missing username or password' });
+      const existing = await storage.getUserByUsername(username);
+      if (existing) return res.status(409).json({ error: 'Username already exists' });
+      const hashed = await bcrypt.hash(password, 10);
+      const user = await storage.createUser({ username, password: hashed });
+      const token = signToken({ id: user.id, username: user.username });
+      res.json({ token, user: { id: user.id, username: user.username } });
+    } catch (err) {
+      res.status(500).json({ error: 'Registration failed' });
+    }
+  });
+
+  app.post('/auth/login', async (req, res) => {
+    try {
+      const { username, password } = req.body || {};
+      if (!username || !password) return res.status(400).json({ error: 'Missing username or password' });
+      let user = await storage.getUserByUsername(username);
+      if (!user) {
+        // Fallback: auto-create default admin if matching credentials
+        if (username === 'admin' && password === 'admin123') {
+          const hashed = await bcrypt.hash(password, 10);
+          user = await storage.createUser({ username, password: hashed });
+        } else {
+          return res.status(401).json({ error: 'Invalid credentials' });
+        }
+      }
+      let ok: boolean;
+      if (user.password && user.password.startsWith('$2')) {
+        ok = await bcrypt.compare(password, user.password);
+      } else {
+        ok = user.password === password;
+        if (ok) {
+          // upgrade to hash
+          const newHash = await bcrypt.hash(password, 10);
+          await storage.updateUser({ id: user.id, password: newHash });
+        }
+      }
+      if (!ok) return res.status(401).json({ error: 'Invalid credentials' });
+      const token = signToken({ id: user.id, username: user.username });
+      res.json({ token, user: { id: user.id, username: user.username } });
+    } catch (err) {
+      res.status(500).json({ error: 'Login failed' });
+    }
+  });
+
+  app.get('/auth/me', requireAuth, async (req: any, res) => {
+    res.json({ user: req.user });
+  });
+
+  // DEV helper: force (re)seed admin credentials
+  app.post('/auth/register-admin', async (_req, res) => {
+    try {
+      const username = 'admin';
+      const password = 'admin123';
+      const existing = await storage.getUserByUsername(username);
+      const hashed = await bcrypt.hash(password, 10);
+      if (!existing) {
+        await storage.createUser({ username, password: hashed });
+      } else {
+        await storage.updateUser({ id: existing.id, password: hashed });
+      }
+      res.json({ message: 'Admin credentials set', username });
+    } catch (e) {
+      res.status(500).json({ error: 'Failed to set admin credentials' });
+    }
+  });
+
   // File upload setup
   const upload = multer({
     storage: multer.diskStorage({
@@ -71,6 +185,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
   // Network Traffic API
   app.get("/api/traffic", async (req, res) => {
+    // Example: protect traffic endpoints in the future using requireAuth
     try {
       const limit = parseInt(req.query.limit as string) || 100;
       const offset = parseInt(req.query.offset as string) || 0;
@@ -268,6 +383,56 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.json({ metrics, summary });
     } catch (error) {
       res.status(500).json({ error: 'Failed to evaluate model' });
+    }
+  });
+
+  // Reports endpoints
+  app.get('/api/reports/summary', async (req, res) => {
+    try {
+      const evaluation = anomalyDetector.evaluateCurrentDataset();
+      res.json(evaluation);
+    } catch (err) {
+      res.status(500).json({ error: 'Failed to fetch report summary' });
+    }
+  });
+
+  app.get('/api/reports/trends', async (req, res) => {
+    try {
+      // Build daily anomaly trend from stored traffic
+      const now = new Date();
+      const start = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+      const traffic = await storage.getTrafficByTimeRange(start, now);
+      const daily: Record<string, { total: number; anomalies: number }> = {};
+      traffic.forEach(t => {
+        const day = new Date(t.timestamp).toISOString().slice(0, 10);
+        if (!daily[day]) daily[day] = { total: 0, anomalies: 0 };
+        daily[day].total += 1;
+        if (t.isAnomaly) daily[day].anomalies += 1;
+      });
+      const series = Object.entries(daily)
+        .sort((a, b) => a[0].localeCompare(b[0]))
+        .map(([date, v]) => ({ date, total: v.total, anomalies: v.anomalies }));
+      res.json({ series });
+    } catch (err) {
+      res.status(500).json({ error: 'Failed to fetch trends' });
+    }
+  });
+
+  app.get('/api/reports/export', async (req, res) => {
+    try {
+      // Export anomalies as CSV
+      const anomalies = await storage.getAnomalousTraffic(1000);
+      const header = ['timestamp','sourceIp','destinationIp','protocol','bytes','packets','riskScore','status'];
+      const rows = anomalies.map(a => [
+        a.timestamp.toISOString(), a.sourceIp, a.destinationIp, a.protocol,
+        a.bytes, a.packets, a.riskScore, a.status
+      ].join(','));
+      const csv = [header.join(','), ...rows].join('\n');
+      res.setHeader('Content-Type', 'text/csv');
+      res.setHeader('Content-Disposition', 'attachment; filename="anomalies.csv"');
+      res.send(csv);
+    } catch (err) {
+      res.status(500).json({ error: 'Failed to export report' });
     }
   });
 

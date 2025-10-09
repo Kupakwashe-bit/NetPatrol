@@ -1,4 +1,4 @@
-import { Home, BarChart3, Brain, Settings, Shield } from "lucide-react";
+import { Home, BarChart3, Brain, Settings, Shield, FileBarChart } from "lucide-react";
 import {
   Sidebar,
   SidebarContent,
@@ -25,6 +25,11 @@ const menuItems = [
     title: "ML Models",
     url: "/models",
     icon: Brain,
+  },
+  {
+    title: "Reports",
+    url: "/reports",
+    icon: FileBarChart,
   },
   {
     title: "Security",
