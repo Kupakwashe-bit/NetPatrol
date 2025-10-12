@@ -69,10 +69,12 @@ export default function TrafficChart() {
             dataKey="time" 
             stroke="hsl(var(--muted-foreground))"
             fontSize={12}
+            label={{ value: 'Time', position: 'insideBottom', offset: -5 }}
           />
           <YAxis 
             stroke="hsl(var(--muted-foreground))"
             fontSize={12}
+            label={{ value: 'Traffic Volume (GBs)', angle: -90, position: 'insideLeft' }}
           />
           <Tooltip
             contentStyle={{

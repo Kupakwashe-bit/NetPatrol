@@ -5,19 +5,70 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Search, Filter, Download, Activity } from "lucide-react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation } from "@tanstack/react-query";
 import { useState } from "react";
 import TrafficChart from "@/components/traffic-chart";
+import OfflineTrafficChart from "@/components/offline-traffic-chart";
 import type { NetworkTraffic } from "@shared/schema";
+
+interface Anomaly {
+  base_station_id: string;
+  anomaly_type: string;
+  timestamp: string;
+  severity: string;
+  details: string;
+}
+
+interface ChartData {
+  timestamp: string;
+  traffic_volume: number;
+}
+
+interface AnalysisResponse {
+  anomalies: Anomaly[];
+  chartData: ChartData[];
+}
 
 export default function TrafficAnalysis() {
   const [searchTerm, setSearchTerm] = useState("");
   const [selectedProtocol, setSelectedProtocol] = useState("");
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
 
-  const { data: trafficData = [] } = useQuery<NetworkTraffic[]>({
+  const { data: trafficData = [] } = useQuery<NetworkTraffic[]>({ 
     queryKey: ["/api/traffic"],
     refetchInterval: 2000,
   });
+
+  const anomalyMutation = useMutation<AnalysisResponse, Error, File>({ 
+    mutationFn: async (file) => {
+      const formData = new FormData();
+      formData.append("file", file);
+
+      const response = await fetch("http://localhost:5001/api/analyze", {
+        method: "POST",
+        body: formData,
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || "Failed to analyze file");
+      }
+
+      return response.json();
+    },
+  });
+
+  const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    if (event.target.files) {
+      setSelectedFile(event.target.files[0]);
+    }
+  };
+
+  const handleAnalyzeClick = () => {
+    if (selectedFile) {
+      anomalyMutation.mutate(selectedFile);
+    }
+  };
 
   const filteredTraffic = trafficData.filter(traffic =>
     traffic && (
@@ -57,6 +108,72 @@ export default function TrafficAnalysis() {
                 Export Report
               </Button>
             </div>
+
+            {/* Offline Anomaly Detection */}
+            <Card className="mb-6">
+              <CardHeader>
+                <h3 className="text-lg font-semibold text-foreground">Offline Anomaly Detection</h3>
+              </CardHeader>
+              <CardContent>
+                <div className="flex items-center space-x-4">
+                  <Input type="file" onChange={handleFileChange} className="flex-1" />
+                  <Button onClick={handleAnalyzeClick} disabled={!selectedFile || anomalyMutation.isPending}>
+                    {anomalyMutation.isPending ? "Analyzing..." : "Analyze"}
+                  </Button>
+                </div>
+                {anomalyMutation.isError && (
+                  <p className="text-destructive mt-2">Error: {anomalyMutation.error.message}</p>
+                )}
+                {anomalyMutation.data && (
+                  <div className="mt-4">
+                    <h4 className="font-semibold">Analysis Results:</h4>
+                    <div className="my-4">
+                      <OfflineTrafficChart data={anomalyMutation.data.chartData} anomalies={anomalyMutation.data.anomalies} />
+                    </div>
+                    <div className="overflow-x-auto mt-2">
+                      <table className="w-full">
+                        <thead className="bg-secondary/50">
+                          <tr>
+                            <th className="text-left py-3 px-4 text-xs font-medium text-muted-foreground uppercase">Base Station ID</th>
+                            <th className="text-left py-3 px-4 text-xs font-medium text-muted-foreground uppercase">Anomaly Type</th>
+                            <th className="text-left py-3 px-4 text-xs font-medium text-muted-foreground uppercase">Timestamp</th>
+                            <th className="text-left py-3 px-4 text-xs font-medium text-muted-foreground uppercase">Severity</th>
+                            <th className="text-left py-3 px-4 text-xs font-medium text-muted-foreground uppercase">Details</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-border">
+                          {anomalyMutation.data.anomalies.map((anomaly, index) => (
+                            <tr key={index} className="hover:bg-secondary/30 transition-colors">
+                              <td className="py-3 px-4 text-sm text-foreground font-mono">{anomaly.base_station_id}</td>
+                              <td className="py-3 px-4 text-sm text-foreground">{anomaly.anomaly_type}</td>
+                              <td className="py-3 px-4 text-sm text-foreground">{new Date(anomaly.timestamp).toLocaleString()}</td>
+                              <td className="py-3 px-4 text-sm">
+                                <Badge variant={anomaly.severity === 'high' ? 'destructive' : 'secondary'}>
+                                  {anomaly.severity}
+                                </Badge>
+                              </td>
+                              <td className="py-3 px-4 text-sm text-muted-foreground">{anomaly.details}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
+            {/* Base Station Map Placeholder */}
+            <Card className="mb-6">
+              <CardHeader>
+                <h3 className="text-lg font-semibold text-foreground">Base Station Status Map</h3>
+              </CardHeader>
+              <CardContent>
+                <div className="h-64 bg-secondary/50 flex items-center justify-center rounded-md">
+                  <p className="text-muted-foreground">Map visualization will be implemented here.</p>
+                </div>
+              </CardContent>
+            </Card>
 
             {/* Traffic Chart */}
             <Card className="mb-6">
