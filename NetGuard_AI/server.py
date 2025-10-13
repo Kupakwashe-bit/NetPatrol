@@ -3,11 +3,13 @@ from flask_cors import CORS
 import pandas as pd
 import os
 import requests
+import time
 from anomaly_detection import preprocess_data, detect_anomalies
 from alerting import send_email_alert
 
 app = Flask(__name__)
-CORS(app)  # Enable CORS for all routes
+# Allow all origins for debugging purposes
+CORS(app)
 
 UPLOAD_DIR = "uploads"
 
@@ -19,14 +21,21 @@ def send_alert_report():
     if not recipient_email:
         return jsonify({'error': 'Email is required'}), 400
 
-    try:
-        # Fetch live alerts from the Node.js server
-        response = requests.get('http://localhost:5000/api/alerts')
-        response.raise_for_status() # Raise an exception for bad status codes
-        live_alerts = response.json()
-    except requests.exceptions.RequestException as e:
-        print(f"Failed to fetch live alerts: {e}")
-        return jsonify({'error': 'Failed to fetch live alerts from the main server.'}), 500
+    live_alerts = None
+    for i in range(3): # Retry up to 3 times
+        try:
+            # Fetch live alerts from the Node.js server
+            response = requests.get('http://localhost:5000/api/alerts')
+            response.raise_for_status() # Raise an exception for bad status codes
+            live_alerts = response.json()
+            break # Success, exit the loop
+        except requests.exceptions.RequestException as e:
+            print(f"Attempt {i+1} failed to fetch live alerts: {e}")
+            if i < 2: # Don't sleep on the last attempt
+                time.sleep(3) # Wait 3 seconds before retrying
+    
+    if live_alerts is None:
+        return jsonify({'error': 'Failed to fetch live alerts from the main server after multiple attempts.'}), 500
 
     if not live_alerts:
         return jsonify({'message': 'No active alerts to report.'}), 200

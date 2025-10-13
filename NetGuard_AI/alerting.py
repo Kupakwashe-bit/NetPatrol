@@ -1,5 +1,6 @@
 import os
 import base64
+from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
@@ -47,12 +48,9 @@ def send_email_alert(recipient_email, anomalies):
 
         # Email body
         body = "<h2>NetGuard AI has detected the following anomalies:</h2>"
-        body += "<table border='1' style='border-collapse: collapse; width: 100%;'>"
-        body += "<tr><th style='padding: 8px;'>Base Station ID</th><th style='padding: 8px;'>Anomaly Type</th><th style='padding: 8px;'>Timestamp</th><th style='padding: 8px;'>Details</th></tr>"
-
+        body += "<table border='1' style='border-collapse: collapse;'><tr><th style='padding: 8px;'>Title</th><th style='padding: 8px;'>Description</th><th style='padding: 8px;'>Timestamp</th><th style='padding: 8px;'>Source IP</th></tr>"
         for anomaly in anomalies:
-            body += f"<tr><td style='padding: 8px;'>{anomaly['base_station_id']}</td><td style='padding: 8px;'>{anomaly['anomaly_type']}</td><td style='padding: 8px;'>{anomaly['timestamp']}</td><td style='padding: 8px;'>{anomaly.get('details', 'N/A')}</td></tr>"
-        
+            body += f"<tr><td style='padding: 8px;'>{anomaly.get('title', 'N/A')}</td><td style='padding: 8px;'>{anomaly.get('description', 'N/A')}</td><td style='padding: 8px;'>{anomaly.get('timestamp', 'N/A')}</td><td style='padding: 8px;'>{anomaly.get('sourceIp', 'N/A')}</td></tr>"
         body += "</table>"
         message.attach(MIMEText(body, 'html'))
 

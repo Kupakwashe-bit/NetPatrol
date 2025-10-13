@@ -15,6 +15,7 @@ import {
   insertMlModelConfigSchema
 } from "@shared/schema";
 import nodemailer from 'nodemailer';
+import axios from 'axios';
 
 export async function registerRoutes(app: Express): Promise<Server> {
   // Initialize ML model
@@ -255,6 +256,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.json(alert);
     } catch (error) {
       res.status(500).json({ error: "Failed to acknowledge alert" });
+    }
+  });
+
+  // Proxy endpoint for sending alert reports
+  app.post("/api/proxy/send-alert-report", async (req, res) => {
+    try {
+      const response = await axios.post('http://localhost:5001/api/alerts/send-report', req.body);
+      res.json(response.data);
+    } catch (error: any) {
+      console.error('Proxy Error:', error.message);
+      res.status(error.response?.status || 500).json({ error: 'Failed to proxy request to Python server' });
     }
   });
 

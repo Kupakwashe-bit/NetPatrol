@@ -20,7 +20,7 @@ export default function AlertsSidebar() {
 
   const sendReportMutation = useMutation<any, Error, string>({
     mutationFn: async (email) => {
-      const response = await fetch("/api/alerts/send-report", {
+      const response = await fetch("/api/proxy/send-alert-report", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
