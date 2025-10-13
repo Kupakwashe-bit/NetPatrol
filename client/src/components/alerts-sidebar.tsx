@@ -3,15 +3,54 @@ import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
-import { useQuery } from "@tanstack/react-query";
+import { Input } from "@/components/ui/input";
+import { useQuery, useMutation } from "@tanstack/react-query";
+import { useState } from "react";
+import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import type { Alert } from "@shared/schema";
 
 export default function AlertsSidebar() {
+  const [recipientEmail, setRecipientEmail] = useState("nyangurukupakwashe@gmail.com");
+
   const { data: alerts = [] } = useQuery<Alert[]>({
     queryKey: ["/api/alerts"],
     refetchInterval: 2000,
   });
+
+  const sendReportMutation = useMutation<any, Error, string>({
+    mutationFn: async (email) => {
+      const response = await fetch("/api/alerts/send-report", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ email }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || "Failed to send report");
+      }
+
+      return response.json();
+    },
+  });
+
+  const handleSendReport = () => {
+    const promise = new Promise<{ message: string }>((resolve, reject) => {
+      sendReportMutation.mutate(recipientEmail, {
+        onSuccess: (data) => resolve(data),
+        onError: (error) => reject(error),
+      });
+    });
+
+    toast.promise(promise, {
+      loading: 'Sending alert report...', 
+      success: (data) => data.message || 'Report sent successfully!',
+      error: (err) => `Failed to send report: ${err.message}`,
+    });
+  };
 
   const getAlertIcon = (type: string) => {
     switch (type) {
@@ -111,6 +150,30 @@ export default function AlertsSidebar() {
         >
           View All Alerts
         </Button>
+      </div>
+
+      <div className="p-4 border-t border-border">
+        <h3 className="text-sm font-medium text-foreground mb-3">Email Reports</h3>
+        <div className="space-y-3">
+          <div>
+            <label htmlFor="sidebar-email-input" className="text-xs text-muted-foreground">Recipient Email</label>
+            <Input 
+              id="sidebar-email-input"
+              type="email" 
+              value={recipientEmail} 
+              onChange={(e) => setRecipientEmail(e.target.value)} 
+              placeholder="Enter email for alerts"
+              className="mt-1 h-8 text-xs"
+            />
+          </div>
+          <Button 
+            onClick={handleSendReport} 
+            disabled={sendReportMutation.isPending}
+            className="w-full text-sm"
+          >
+            {sendReportMutation.isPending ? "Sending..." : "Send Report Now"}
+          </Button>
+        </div>
       </div>
 
       <div className="p-4 border-t border-border">

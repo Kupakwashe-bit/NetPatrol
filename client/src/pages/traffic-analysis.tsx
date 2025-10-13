@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { Search, Filter, Download, Activity } from "lucide-react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useState } from "react";
+import { toast } from "sonner";
 import TrafficChart from "@/components/traffic-chart";
 import OfflineTrafficChart from "@/components/offline-traffic-chart";
 import type { NetworkTraffic } from "@shared/schema";
@@ -27,6 +28,7 @@ interface ChartData {
 interface AnalysisResponse {
   anomalies: Anomaly[];
   chartData: ChartData[];
+  emailStatus: string;
 }
 
 export default function TrafficAnalysis() {

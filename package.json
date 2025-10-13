@@ -73,6 +73,7 @@
     "react-icons": "^5.2.1",
     "react-resizable-panels": "^2.0.20",
     "recharts": "^2.12.7",
+    "sonner": "^2.0.7",
     "tailwind-merge": "^2.4.0",
     "tailwindcss-animate": "^1.0.7",
     "tw-animate-css": "^1.2.5",

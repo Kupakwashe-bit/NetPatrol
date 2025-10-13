@@ -5,3 +5,7 @@ matplotlib
 Flask
 Flask-Cors
 prophet
+requests
+google-api-python-client
+google-auth-oauthlib
+google-auth-httplib2
